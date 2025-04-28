@@ -3,7 +3,7 @@
     {
       "MaterialTitle": {
         "Name": "ZENER DIODE 5.6V",
-        "PN": "Z522 **",
+        "PN": "Z522",
         "MF": "DIODES"
       },
       "MID": "MID20276",
@@ -12,7 +12,7 @@
       "MQNT": 5,
       "MQATG": "#CLASS_1",
       "ML": "102",
-      "MCost": 18.58,
+      "MCost": 7.5,
       "MDS": "",
       "MAF1": "",
       "MAF2": "",
