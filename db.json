@@ -2,14 +2,14 @@
   "inventory": [
     {
       "MaterialTitle": {
-        "Name": "ZENER DIODE 5.6V$$$",
-        "PN": "Z522 $$$$",
+        "Name": "ZENER DIODE 5.6V",
+        "PN": "Z522",
         "MF": "DIODES"
       },
       "MID": "MID20276",
       "MD": "Z522 series is ZENER DIODE with 5.6V drop. || Alternates: Fairchild@MMSZ5230B, MCC Semi_MMSZ5221-MMSZ5259(SOD123), Onsemi_MMSZ5221BT1-D.PDF0e_F, Vishay_MMSZ. || Design Ref: D182 || Required MIDs: MID20273.",
       "MT": "Electronic Material",
-      "MQNT": 1000,
+      "MQNT": 1,
       "MQATG": "#CLASS_1",
       "ML": "102",
       "MCost": 5.2,
