@@ -7,7 +7,7 @@
         "MF": "DIODES"
       },
       "MQNT": 5,
-      "MCost": 0,
+      "MCost": 99.7,
       "MD": "Z522 series is ZENER DIODE with 5.6V drop. || Alternates: Fairchild@MMSZ5230B, MCC Semi_MMSZ5221-MMSZ5259(SOD123), Onsemi_MMSZ5221BT1-D.PDF0e_F, Vishay_MMSZ. || Design Ref: D182 || Required MIDs: MID20273.",
       "ML": "102"
     }
