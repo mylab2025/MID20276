@@ -1,0 +1,638 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Net.Http;
+using System.Text.Json;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
+using ClosedXML.Excel;
+using PdfSharp.Pdf;
+using PdfSharp.Drawing;
+using System.Reflection;
+
+namespace MyLab_V2_WPF
+{
+    public partial class BomWindow : Window
+    {
+        private string GitHubUsername => (Application.Current as App)?.GitHubUsername ?? "";
+        private string PersonalAccessToken => (Application.Current as App)?.PersonalAccessToken ?? "";
+        private readonly HttpClient _httpClient = new HttpClient();
+        private static List<BomItem> bomItems = new List<BomItem>();
+        private const int InitialRows = 1;
+
+        public BomWindow()
+        {
+            InitializeComponent();
+            InitializeHeader();
+            RestoreBomItems();
+            UpdateTotalCostDisplay();
+        }
+
+        private void InitializeHeader()
+        {
+            BomGrid.Children.Clear();
+            BomGrid.RowDefinitions.Clear();
+            BomGrid.ColumnDefinitions.Clear();  // Add this line
+
+            // Define columns for each header
+            for (int i = 0; i < 21; i++)  // Assuming 11 columns based on your header
+            {
+                BomGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            }
+
+            BomGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            AddHeaderText(0, 0, "SL No.");
+            AddHeaderText(0, 1, "Material ID");
+            AddHeaderText(0, 2, "Title");
+            AddHeaderText(0, 3, "Qty");
+            AddHeaderText(0, 4, "Unit ₹");
+            AddHeaderText(0, 5, "Cost ₹");
+            AddHeaderText(0, 6, "Status");
+
+            if (AdditionalInfoCheckBox?.IsChecked == true)
+            {
+                AddHeaderText(0, 7, "PartNumber");
+                AddHeaderText(0, 8, "Manufacturer");
+                AddHeaderText(0, 9, "Location");
+                AddHeaderText(0, 10, "Description");
+                AddHeaderText(0, 11, "Material Type");
+                AddHeaderText(0, 12, "Quality Tag");
+                AddHeaderText(0, 13, "Datasheet");
+                AddHeaderText(0, 14, "Reference");
+                AddHeaderText(0, 15, "File1");
+                AddHeaderText(0, 16, "File2");
+                AddHeaderText(0, 17, "File3");
+                AddHeaderText(0, 18, "File4");
+                AddHeaderText(0, 19, "File5");
+                AddHeaderText(0, 20, "Image Links");
+
+            }
+        }
+
+
+        private void AddHeaderText(int row, int col, string text)
+        {
+            var tb = new TextBlock
+            {
+                Text = text,
+                FontWeight = FontWeights.Bold,
+                FontSize = 13,
+                Background = Brushes.LightGray,
+                Padding = new Thickness(4),
+                Margin = new Thickness(1),
+                TextAlignment = TextAlignment.Center
+            };
+            Grid.SetRow(tb, row);
+            Grid.SetColumn(tb, col);
+            BomGrid.Children.Add(tb);
+        }
+
+
+
+        private void EditModeCheckBox_Checked(object sender, RoutedEventArgs e)
+        {
+            bool isEditable = EditModeCheckBox.IsChecked == true;
+            SaveChangesButton.Visibility = isEditable ? Visibility.Visible : Visibility.Collapsed;
+
+            foreach (var child in BomGrid.Children.OfType<FrameworkElement>())
+            {
+                int col = Grid.GetColumn(child);
+
+                if (child is TextBox tb)
+                {
+                    // Only MID column (col==1) should stay readonly
+                    if (col == 1)
+                        tb.IsReadOnly = true;
+                    else
+                        tb.IsReadOnly = !isEditable;
+                }
+            }
+        }
+
+        private async void SaveChangesButton_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                SaveProgressBar.Visibility = Visibility.Visible;
+                SaveProgressBar.Value = 0;
+                int total = bomItems.Count;
+                int processed = 0;
+
+                for (int row = 1; row < BomGrid.RowDefinitions.Count; row++)
+                {
+                    var item = bomItems[row - 1];
+                    foreach (var child in BomGrid.Children.OfType<FrameworkElement>())
+                    {
+                        if (Grid.GetRow(child) == row)
+                        {
+                            if (child is TextBox tb)
+                            {
+                                switch (Grid.GetColumn(child))
+                                {
+                                    case 2: item.Title = tb.Text; break;
+                                    case 3: item.Quantity = int.TryParse(tb.Text, out var qty) ? qty : 0; break;
+                                    case 4: item.Cost = decimal.TryParse(tb.Text, out var cost) ? (double)cost : 0; break;
+                                    case 7: item.PartNumber = tb.Text; break;
+                                    case 8: item.Manufacturer = tb.Text; break;
+                                    case 9: item.Location = tb.Text; break;
+                                    case 10: item.Description = tb.Text; break;
+                                    case 11: item.MaterialType = tb.Text; break;
+                                    case 12: item.QualityTag = tb.Text; break;
+                                    case 13: item.DatasheetLink = tb.Text; break;
+                                    case 14: item.ReferenceLink = tb.Text; break;
+                                    case 15: item.AdditionalFile1 = tb.Text; break;
+                                    case 16: item.AdditionalFile2 = tb.Text; break;
+                                    case 17: item.AdditionalFile3 = tb.Text; break;
+                                    case 18: item.AdditionalFile4 = tb.Text; break;
+                                    case 19: item.AdditionalFile5 = tb.Text; break;
+                                    case 20:
+                                        item.MaterialImages = tb.Text.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+                                                                      .Select(s => s.Trim()).ToList();
+                                        break;
+                                }
+                            }
+                        }
+                    }
+
+                    await UploadUpdatedJsonToGitHub(item);
+                    // Update progress bar
+                    processed++;
+                    SaveProgressBar.Value = (double)processed / total * 100;
+                }
+                SaveProgressBar.Value = 100;
+                MessageBox.Show("Changes successfully saved!", "Success", MessageBoxButton.OK, MessageBoxImage.Information);
+                SaveProgressBar.Visibility = Visibility.Collapsed;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Failed to save changes: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private async Task UploadUpdatedJsonToGitHub(BomItem item)
+        {
+            string username = GitHubUsername;
+            string token = PersonalAccessToken;
+            string repo = item.MID;
+            string filePath = "db.json";
+
+            string apiUrl = $"https://api.github.com/repos/{username}/{repo}/contents/{filePath}";
+
+            using var client = new HttpClient();
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("MyLabApp");
+            var byteArray = System.Text.Encoding.ASCII.GetBytes($"{username}:{token}");
+            client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", Convert.ToBase64String(byteArray));
+
+            // First: Get the current file SHA
+            var getResp = await client.GetAsync(apiUrl);
+            getResp.EnsureSuccessStatusCode();
+            var getJson = JsonDocument.Parse(await getResp.Content.ReadAsStringAsync());
+            string sha = getJson.RootElement.GetProperty("sha").GetString();
+
+            // Build new content
+            var newJson = new
+            {
+                inventory = new[]
+                {
+            new
+            {
+                MaterialTitle = new
+                {
+                    Name = item.Title,
+                    PN = item.PartNumber,
+                    MF = item.Manufacturer
+                },
+                MID = item.MID,
+                MD = item.Description,
+                MT = item.MaterialType,
+                MQNT = item.Quantity,
+                MQATG = item.QualityTag,
+                ML = item.Location,
+                MCost = item.Cost,
+                MDS = item.DatasheetLink,
+                MAF1 = item.AdditionalFile1,
+                MAF2 = item.AdditionalFile2,
+                MAF3 = item.AdditionalFile3,
+                MAF4 = item.AdditionalFile4,
+                MAF5 = item.AdditionalFile5,
+                MR = item.ReferenceLink,
+                MaterialImages = item.MaterialImages
+            }
+        }
+            };
+
+            string newJsonContent = JsonSerializer.Serialize(newJson, new JsonSerializerOptions { WriteIndented = true });
+            var base64Content = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(newJsonContent));
+
+            var payload = new
+            {
+                message = "Update db.json via BOM Manager",
+                content = base64Content,
+                sha = sha
+            };
+
+            var content = new StringContent(JsonSerializer.Serialize(payload), System.Text.Encoding.UTF8, "application/json");
+            var putResp = await client.PutAsync(apiUrl, content);
+            putResp.EnsureSuccessStatusCode();
+        }
+
+
+
+
+        private void RestoreBomItems()
+        {
+            if (bomItems.Count == 0)
+            {
+                for (int i = 0; i < InitialRows; i++) AddNewBomRow();
+            }
+            else
+            {
+                var existing = bomItems.ToList();
+                bomItems.Clear();
+                foreach (var item in existing) AddNewBomRow(item);
+            }
+            UpdateTotalCostDisplay();
+        }
+
+        private void AddNewBomRow(BomItem preset = null)
+        {
+            int row = BomGrid.RowDefinitions.Count;
+            BomGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+            bomItems.Add(preset ?? new BomItem());
+            var item = bomItems.Last();
+
+            AddCell(row, 0, new TextBlock { Text = row.ToString(), VerticalAlignment = VerticalAlignment.Center });
+
+            var midBox = CreateTextBox(preset?.MID, false);
+            midBox.LostFocus += async (s, e) => await FetchMaterialDetails(midBox, row);
+            AddCell(row, 1, midBox);
+
+            var titleBox = CreateTextBox(preset?.Title, true);
+            AddCell(row, 2, titleBox);
+
+            var qtyBox = CreateTextBox(preset?.Quantity.ToString(), false);
+            qtyBox.LostFocus += async (s, e) => await ValidateStock(qtyBox, row);
+            AddCell(row, 3, qtyBox);
+
+            var unitPriceBox = CreateTextBox(preset?.Cost.ToString("F2"), true);
+            AddCell(row, 4, unitPriceBox);
+
+            var costBox = new TextBlock
+            {
+                Text = $"₹{(preset?.Cost * preset?.Quantity ?? 0):0.00}",
+                VerticalAlignment = VerticalAlignment.Center,
+                Foreground = Brushes.DarkGreen,
+                Margin = new Thickness(4)
+            };
+            AddCell(row, 5, costBox);
+
+            var statusBox = new TextBlock
+            {
+                Text = preset?.Status ?? "",
+                VerticalAlignment = VerticalAlignment.Center,
+                Foreground = Brushes.DarkBlue,
+                Margin = new Thickness(4)
+            };
+            AddCell(row, 6, statusBox);
+
+            if (AdditionalInfoCheckBox?.IsChecked == true)
+            {
+                AddCell(row, 7, CreateTextBox(preset?.PartNumber, true));
+                AddCell(row, 8, CreateTextBox(preset?.Manufacturer, true));
+                AddCell(row, 9, CreateTextBox(preset?.Location, true));
+                AddCell(row, 10, CreateTextBox(preset?.Description, true));
+                AddCell(row, 11, CreateTextBox(preset?.MaterialType, true));
+                AddCell(row, 12, CreateTextBox(preset?.QualityTag, true));
+                AddCell(row, 13, CreateTextBox(preset?.DatasheetLink, true));
+                AddCell(row, 14, CreateTextBox(preset?.ReferenceLink, true));
+                AddCell(row, 15, CreateTextBox(preset?.AdditionalFile1, true));
+                AddCell(row, 16, CreateTextBox(preset?.AdditionalFile2, true));
+                AddCell(row, 17, CreateTextBox(preset?.AdditionalFile3, true));
+                AddCell(row, 18, CreateTextBox(preset?.AdditionalFile4, true));
+                AddCell(row, 19, CreateTextBox(preset?.AdditionalFile5, true));
+                AddCell(row, 20, CreateTextBox(preset?.MaterialImages != null ? string.Join(",", preset.MaterialImages) : "", true));
+
+            }
+
+            UpdateTotalCostDisplay();
+        }
+
+        private TextBox CreateTextBox(string text, bool isReadOnly)
+        {
+            return new TextBox
+            {
+                Text = text ?? "",
+                IsReadOnly = isReadOnly,
+                Margin = new Thickness(2),
+                Padding = new Thickness(3),
+                FontSize = 12
+            };
+        }
+
+        private void AddCell(int row, int col, UIElement control)
+        {
+            Grid.SetRow(control, row);
+            Grid.SetColumn(control, col);
+            BomGrid.Children.Add(control);
+        }
+
+        private async Task FetchMaterialDetails(TextBox midBox, int row)
+        {
+            if (EditModeCheckBox.IsChecked == true)
+            {
+                // Skip auto-fetch if Edit Mode is active
+                return;
+            }
+
+            string mid = midBox.Text.Trim();
+            if (string.IsNullOrWhiteSpace(mid)) return;
+
+            string githubUsername = Settings.Default.GitHubUsername;
+            string url = $"https://raw.githubusercontent.com/{githubUsername}/{mid}/main/db.json";
+            try
+            {
+                using HttpClient client = new HttpClient();
+                string json = await client.GetStringAsync(url);
+                var doc = JsonDocument.Parse(json);
+                var item = doc.RootElement.GetProperty("inventory")[0];
+
+                var title = item.GetProperty("MaterialTitle").GetProperty("Name").GetString();
+                var cost = item.TryGetProperty("MCost", out var costEl) ? costEl.GetDouble() : 0;
+                var stock = item.TryGetProperty("MQNT", out var qEl) ? qEl.GetInt32() : 0;
+
+                string pn = item.GetProperty("MaterialTitle").TryGetProperty("PN", out var pnEl) ? pnEl.GetString() : "";
+                string mf = item.GetProperty("MaterialTitle").TryGetProperty("MF", out var mfEl) ? mfEl.GetString() : "";
+                string md = item.TryGetProperty("MD", out var mdEl) ? mdEl.GetString() : "";
+                string ml = item.TryGetProperty("ML", out var mlEl) ? mlEl.GetString() : "";
+
+                var mt = item.TryGetProperty("MT", out var mtEl) ? mtEl.GetString() : "";
+                var mqatg = item.TryGetProperty("MQATG", out var mqatgEl) ? mqatgEl.GetString() : "";
+                var mds = item.TryGetProperty("MDS", out var mdsEl) ? mdsEl.GetString() : "";
+                var mr = item.TryGetProperty("MR", out var mrEl) ? mrEl.GetString() : "";
+                var maf1 = item.TryGetProperty("MAF1", out var maf1El) ? maf1El.GetString() : "";
+                var maf2 = item.TryGetProperty("MAF2", out var maf2El) ? maf2El.GetString() : "";
+                var maf3 = item.TryGetProperty("MAF3", out var maf3El) ? maf3El.GetString() : "";
+                var maf4 = item.TryGetProperty("MAF4", out var maf4El) ? maf4El.GetString() : "";
+                var maf5 = item.TryGetProperty("MAF5", out var maf5El) ? maf5El.GetString() : "";
+
+                List<string> materialImages = new List<string>();
+                if (item.TryGetProperty("MaterialImages", out var imagesEl) && imagesEl.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var img in imagesEl.EnumerateArray())
+                    {
+                        materialImages.Add(img.GetString());
+                    }
+                }
+
+               
+
+
+                var index = row - 1;
+                var b = bomItems[index];
+                b.MID = mid;
+                b.Title = title;
+                b.Cost = cost;
+                b.Stock = stock;
+                b.PartNumber = pn;
+                b.Manufacturer = mf;
+                b.Description = md;
+                b.Location = ml;
+                // Now set to bomItem
+                b.MaterialType = mt;
+                b.QualityTag = mqatg;
+                b.DatasheetLink = mds;
+                b.ReferenceLink = mr;
+                b.AdditionalFile1 = maf1;
+                b.AdditionalFile2 = maf2;
+                b.AdditionalFile3 = maf3;
+                b.AdditionalFile4 = maf4;
+                b.AdditionalFile5 = maf5;
+                b.MaterialImages = materialImages;
+
+                UpdateRow(row);
+                UpdateTotalCostDisplay();
+            }
+            catch
+            {
+                MessageBox.Show($"Failed to fetch data for {mid}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private async Task ValidateStock(TextBox qtyBox, int row)
+        {
+            if (EditModeCheckBox.IsChecked == true)
+            {
+                // In Edit Mode, do NOT auto-validate or overwrite stock status
+                return;
+            }
+
+            if (!int.TryParse(qtyBox.Text, out int inputQty)) return;
+            var index = row - 1;
+            bomItems[index].Quantity = inputQty;
+
+            bomItems[index].Status = inputQty > bomItems[index].Stock
+                ? $"NA (AVL: {bomItems[index].Stock})"
+                : "OK";
+
+            UpdateRow(row);
+            UpdateTotalCostDisplay();
+        }
+
+        private void UpdateRow(int row)
+        {
+            var item = bomItems[row - 1];
+            foreach (var child in BomGrid.Children.OfType<FrameworkElement>())
+            {
+                if (Grid.GetRow(child) == row)
+                {
+                    if (Grid.GetColumn(child) == 2 && child is TextBox tb) tb.Text = item.Title;
+                    if (Grid.GetColumn(child) == 4 && child is TextBox ub) ub.Text = item.Cost.ToString("F2");
+                    if (Grid.GetColumn(child) == 5 && child is TextBlock cb) cb.Text = $"₹{item.Cost * item.Quantity:0.00}";
+                    if (Grid.GetColumn(child) == 6 && child is TextBlock sb) sb.Text = item.Status;
+                }
+            }
+        }
+
+        private void UpdateTotalCostDisplay()
+        {
+            double total = bomItems.Sum(x => x.Quantity * x.Cost);
+            TotalCostTextBlock.Text = $"Total: ₹{total:0.00}";
+        }
+
+        private void AddRow_Click(object sender, RoutedEventArgs e) => AddNewBomRow();
+
+        private void Clear_Click(object sender, RoutedEventArgs e)
+        {
+            if (MessageBox.Show("Clear all rows?", "Confirm", MessageBoxButton.YesNo) != MessageBoxResult.Yes) return;
+            BomGrid.Children.Clear();
+            BomGrid.RowDefinitions.Clear();
+            bomItems.Clear();
+            InitializeHeader();
+            RestoreBomItems();
+        }
+
+        private void AdditionalInfoCheckBox_Changed(object sender, RoutedEventArgs e)
+        {
+            InitializeHeader();
+            RestoreBomItems();
+        }
+
+        private void ExportPdf_Click(object sender, RoutedEventArgs e)
+        {
+            var dlg = new Microsoft.Win32.SaveFileDialog
+            {
+                Filter = "PDF Files (*.pdf)|*.pdf",
+                FileName = "BOM_Report"
+            };
+            if (dlg.ShowDialog() != true) return;
+
+            const int maxRowsPerPage = 32;
+            var pdf = new PdfDocument();
+            var pages = new List<(PdfPage Page, XGraphics Gfx)>();
+
+            var font = new XFont("Segoe UI", 10);
+            var boldFont = new XFont("Segoe UI", 12, XFontStyleEx.Bold);
+            int totalPages = (int)Math.Ceiling(bomItems.Count / (double)maxRowsPerPage);
+            int currentRow = 0;
+
+            for (int pageIndex = 0; pageIndex < totalPages; pageIndex++)
+            {
+                var page = pdf.AddPage();
+                var gfx = XGraphics.FromPdfPage(page);
+                pages.Add((page, gfx));
+
+                double y = 60;
+
+                // Logo
+                try
+                {
+                    var assembly = Assembly.GetExecutingAssembly();
+                    using var stream = assembly.GetManifestResourceStream("MyLab_V2_WPF.Images.logo.png");
+                    if (stream != null)
+                    {
+                        XImage logo = XImage.FromStream(stream);
+                        gfx.DrawImage(logo, 20, 10, 40, 40);
+                    }
+                }
+                catch { }
+
+                // Header
+                gfx.DrawString("BOM Report", boldFont, XBrushes.Gray,
+                    new XRect(80, 20, page.Width - 100, 40), XStringFormats.TopRight);
+                gfx.DrawString($"-------------------------------------------------------------------------------------------------------------------------------", font, XBrushes.Gray, 40, y + 20);
+                y += 40;
+                gfx.DrawString("  Material ID    Qty      Unit ₹     Cost ₹             Desp.", boldFont, XBrushes.Black, 40, y);
+                y += 20;
+
+                for (int i = 0; i < maxRowsPerPage && currentRow < bomItems.Count; i++, currentRow++)
+                {
+                    var item = bomItems[currentRow];
+                    string line = $"{currentRow + 1,-3}  {item.MID,-8}       {item.Quantity,3}          ₹{item.Cost,5:F2}       ₹{item.Quantity * item.Cost,6:F2}          {item.Title,-18}";
+                    gfx.DrawString(line, font, XBrushes.Black, 40, y);
+                    y += 18;
+                }
+
+                // Footer: Page number placeholder, to be filled after pages created
+                gfx.DrawString($"-------------------------------------------------------------------------------------------------------------------------------", font, XBrushes.Gray, 40, y + 20);
+            }
+
+            // Add total and footer to last page
+            var (lastPage, lastGfx) = pages.Last();
+            double lastY = lastPage.Height - 100;
+            double total = bomItems.Sum(x => x.Quantity * x.Cost);
+            lastGfx.DrawString($"Total: ₹  {total:0.00} /-", boldFont, XBrushes.Black, 40, lastY - 20);
+
+            // Add page number and timestamp on every page
+            for (int i = 0; i < pages.Count; i++)
+            {
+                var (page, gfx) = pages[i];
+                string footer = $"Page {i + 1} of {totalPages}        *** Generated On: {DateTime.Now:dd MMM yyyy hh:mm tt} ***";
+                gfx.DrawString(footer, font, XBrushes.Gray,
+                    new XRect(40, page.Height - 40, page.Width - 80, 20), XStringFormats.BottomRight);
+            }
+
+            pdf.Save(dlg.FileName);
+            MessageBox.Show("PDF Exported!", "Success", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
+
+        private void ExportExcel_Click(object sender, RoutedEventArgs e)
+        {
+            var dlg = new Microsoft.Win32.SaveFileDialog
+            {
+                Filter = "Excel Files (*.xlsx)|*.xlsx",
+                FileName = "BOM_Report"
+            };
+            if (dlg.ShowDialog() != true) return;
+
+            using var workbook = new XLWorkbook();
+            var ws = workbook.Worksheets.Add("BOM");
+            var row = 1;
+
+            ws.Cell(row, 1).Value = "SL";
+            ws.Cell(row, 2).Value = "MID";
+            ws.Cell(row, 3).Value = "Title";
+            ws.Cell(row, 4).Value = "Qty";
+            ws.Cell(row, 5).Value = "Unit ₹";
+            ws.Cell(row, 6).Value = "Cost ₹";
+            ws.Cell(row, 7).Value = "Status";
+            ws.Cell(row, 8).Value = "PartNumber";
+            ws.Cell(row, 9).Value = "Manufacturer";
+            ws.Cell(row, 10).Value = "Location";
+            ws.Cell(row, 11).Value = "Description";
+
+            for (int i = 0; i < bomItems.Count; i++)
+            {
+                var b = bomItems[i];
+                row++;
+                ws.Cell(row, 1).Value = i + 1;
+                ws.Cell(row, 2).Value = b.MID;
+                ws.Cell(row, 3).Value = b.Title;
+                ws.Cell(row, 4).Value = b.Quantity;
+                ws.Cell(row, 5).Value = b.Cost;
+                ws.Cell(row, 6).Value = b.Quantity * b.Cost;
+                ws.Cell(row, 7).Value = b.Status;
+                ws.Cell(row, 8).Value = b.PartNumber;
+                ws.Cell(row, 9).Value = b.Manufacturer;
+                ws.Cell(row, 10).Value = b.Location;
+                ws.Cell(row, 11).Value = b.Description;
+            }
+
+            row++;
+            ws.Cell(row, 5).Value = "Total:";
+            ws.Cell(row, 6).Value = bomItems.Sum(x => x.Quantity * x.Cost);
+            ws.Range(row, 6, row, 6).Style.Font.Bold = true;
+
+            workbook.SaveAs(dlg.FileName);
+            MessageBox.Show("Excel Exported!", "Success", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+    }
+
+    public class BomItem
+    {
+        public string MID { get; set; }
+        public string Title { get; set; }
+        public int Quantity { get; set; }
+        public double Cost { get; set; }
+        public int Stock { get; set; }
+        public string Status { get; set; }
+        public string PartNumber { get; set; }
+        public string Manufacturer { get; set; }
+        public string Description { get; set; }
+        public string Location { get; set; }
+        public string MaterialType { get; set; }
+        public string QualityTag { get; set; }
+        public string DatasheetLink { get; set; }
+        public string ReferenceLink { get; set; }
+        public string AdditionalFile1 { get; set; }
+        public string AdditionalFile2 { get; set; }
+        public string AdditionalFile3 { get; set; }
+        public string AdditionalFile4 { get; set; }
+        public string AdditionalFile5 { get; set; }
+        public List<string> MaterialImages { get; set; } = new List<string>();
+
+    }
+}
