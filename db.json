@@ -2,8 +2,8 @@
   "inventory": [
     {
       "MaterialTitle": {
-        "Name": "ZENER DIODE 5.V",
-        "PN": "Z522",
+        "Name": "ZENER DIODE 5.6V",
+        "PN": "Z522 **",
         "MF": "DIODES"
       },
       "MID": "MID20276",
